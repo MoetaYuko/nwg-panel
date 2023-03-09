@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 
+from collections import OrderedDict
 from gi.repository import Gtk, Gdk
 
 import nwg_panel.common
@@ -8,10 +9,11 @@ from nwg_panel.tools import check_key, get_icon_name, update_image, update_image
 
 
 class SwayWorkspaces(Gtk.Box):
-    def __init__(self, settings, i3, icons_path):
+    def __init__(self, settings, i3, icons_path, output):
         Gtk.Box.__init__(self, orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.settings = settings
         self.i3 = i3
+        self.panel_output = output
         self.num_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.ws_num2box = {}
         self.ws_num2lbl = {}
@@ -35,6 +37,7 @@ class SwayWorkspaces(Gtk.Box):
         check_key(self.settings, "mark-autotiling", True)
         check_key(self.settings, "mark-content", True)
         check_key(self.settings, "hide-empty", False)
+        check_key(self.settings, "hide-other-outputs", False)
         check_key(self.settings, "show-layout", True)
         check_key(self.settings, "angle", 0.0)
         if self.settings["angle"] != 0.0:
@@ -43,32 +46,23 @@ class SwayWorkspaces(Gtk.Box):
         # prevent from #142
         ws_num = -1
         if self.i3.get_tree().find_focused():
-            ws_num, win_name, win_id, non_empty, win_layout, numbers = self.find_details()
-
-        if len(self.settings["custom-labels"]) == 1:
-            self.settings["custom-labels"] *= len(self.settings["numbers"])
-        elif len(self.settings["custom-labels"]) != len(self.settings["numbers"]):
-            self.settings["custom-labels"] = []
-
-        if len(self.settings["focused-labels"]) == 1:
-            self.settings["focused-labels"] *= len(self.settings["numbers"])
-        elif len(self.settings["focused-labels"]) != len(self.settings["numbers"]):
-            self.settings["focused-labels"] = []
+            ws_num = self.find_details()[0]
 
         self.pack_start(self.num_box, False, False, 0)
 
-        for idx, num in enumerate(self.settings["numbers"]):
-            if num == str(ws_num) and self.settings["focused-labels"]:
-                label = self.settings["focused-labels"][idx]
-            elif self.settings["custom-labels"]:
-                label = self.settings["custom-labels"][idx]
-            else:
-                label = str(num)
+        for num in self.settings["numbers"]:
+            try:
+                num = int(num)
+            except ValueError:
+                num = 0
+
+            focused = num == ws_num
+            label = self.get_ws_label(num, focused=focused)
 
             eb, lbl = self.build_number(num, label)
             self.num_box.pack_start(eb, False, False, 0)
 
-            if num == str(ws_num):
+            if focused:
                 eb.set_property("name", "task-box-focused")
             else:
                 eb.set_property("name", "task-box")
@@ -116,34 +110,56 @@ class SwayWorkspaces(Gtk.Box):
 
         return eb, lbl
 
+    def get_ws_label(self, num, ws_defs=None, focused=False):
+        """
+        Get the text to display for a workspace:
+        - num: the number of the workspace (as integer)
+        - focused: if the workspace is currently focused
+        - ws_defs: as returned by find_details()
+        """
+
+        # config_idx is the index of the current workspace in the
+        # configuration. It is the index of the workspace in the
+        # numbers config field, or the an index based on the
+        # workspace number, first workspace being number 1
+        try:
+            config_idx = self.settings["numbers"].index(str(num))
+        except ValueError:
+            config_idx = num - 1
+
+        if focused and len(self.settings["focused-labels"]) > 0:
+            labels = self.settings["focused-labels"]
+        else:
+            labels = self.settings["custom-labels"]
+
+        if config_idx < len(labels):
+            text = labels[config_idx]
+        elif len(labels) == 1:
+            text = labels[0]
+        elif ws_defs and num in ws_defs:
+            text = ws_defs[num]
+        else:
+            text = str(num)
+
+        return text
+
     def refresh(self):
         if self.i3.get_tree().find_focused():
-            ws_num, win_name, win_id, non_empty, win_layout, numbers = self.find_details()
-
-            if len(self.settings["numbers"]) > 0:
-                numbers = self.settings["numbers"]
+            ws_num, win_name, win_id, non_empty, win_layout, ws_defs = self.find_details()
 
             if ws_num > 0:
                 for num in self.ws_num2lbl:
                     self.ws_num2lbl[num].hide()
 
-                for _idx, num in enumerate(numbers):
-                    idx = None
-                    if num in self.settings["numbers"]:
-                        idx = self.settings["numbers"].index(num)
+                numbers = ws_defs.keys()
+                for num in numbers:
                     try:
                         int_num = int(num)
-                    except:
+                    except ValueError:
                         int_num = 0
 
-                    if idx is None:
-                        text = str(num)
-                    elif num == str(ws_num) and self.settings["focused-labels"]:
-                        text = self.settings["focused-labels"][idx]
-                    elif self.settings["custom-labels"]:
-                        text = self.settings["custom-labels"][idx]
-                    else:
-                        text = str(num)
+                    focused = int_num == ws_num
+                    text = self.get_ws_label(int_num, ws_defs, focused=focused)
 
                     if num not in self.ws_num2lbl:
                         eb, lbl = self.build_number(num, text)
@@ -152,7 +168,7 @@ class SwayWorkspaces(Gtk.Box):
 
                     lbl = self.ws_num2lbl[num]
 
-                    if not self.settings["hide-empty"] or int_num in non_empty or num == str(ws_num):
+                    if not self.settings["hide-empty"] or int_num in non_empty or focused:
                         lbl.show()
                     else:
                         lbl.hide()
@@ -168,7 +184,7 @@ class SwayWorkspaces(Gtk.Box):
 
                     lbl.set_markup(text)
 
-                    if num == str(ws_num):
+                    if focused:
                         self.ws_num2box[num].set_property("name", "task-box-focused")
                     else:
                         self.ws_num2box[num].set_property("name", "task-box")
@@ -227,12 +243,24 @@ class SwayWorkspaces(Gtk.Box):
         win_name = ""
         win_id = ""  # app_id if available, else window_class
         layout = None
-        numbers = []
+        ws_defs = {}
 
         for ws in workspaces:
-            numbers.append(str(ws.num))
+            _, _, name = ws.name.partition(':')
+            if len(name) == 0:
+                name = str(ws.num)
+
+            hide_other_outputs = self.settings["hide-other-outputs"] and self.panel_output is not None
+            if hide_other_outputs and ws.output != self.panel_output:
+                continue
+
+            ws_defs[ws.num] = name
             if ws.focused:
                 ws_num = ws.num
+
+        # Sort ws_defs before constructing numbers and names to ensure
+        # dynamic workspaces always appear in sorted order
+        ws_defs = OrderedDict(sorted(ws_defs.items()))
 
         non_empty = []
         if self.settings["show-name"] or self.settings["show-icon"]:
@@ -272,16 +300,23 @@ class SwayWorkspaces(Gtk.Box):
             if not layout:
                 layout = f.parent.layout
 
-        return ws_num, win_name, win_id, non_empty, layout, numbers
+        return ws_num, win_name, win_id, non_empty, layout, ws_defs
 
     def on_click(self, event_box, event_button, num):
         nwg_panel.common.i3.command("workspace number {}".format(num))
 
     def on_scroll(self, event_box, event):
+        hide_other_outputs = self.settings["hide-other-outputs"] and self.panel_output is not None
         if event.direction == Gdk.ScrollDirection.UP:
-            nwg_panel.common.i3.command("workspace prev")
+            if hide_other_outputs:
+                nwg_panel.common.i3.command("workspace prev_on_output")
+            else:
+                nwg_panel.common.i3.command("workspace prev")
         elif event.direction == Gdk.ScrollDirection.DOWN:
-            nwg_panel.common.i3.command("workspace next")
+            if hide_other_outputs:
+                nwg_panel.common.i3.command("workspace next_on_output")
+            else:
+                nwg_panel.common.i3.command("workspace next")
 
     def on_enter_notify_event(self, widget, event):
         widget.set_state_flags(Gtk.StateFlags.DROP_ACTIVE, clear=False)
