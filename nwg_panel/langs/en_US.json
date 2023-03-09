@@ -49,6 +49,7 @@
   "command": "Command",
   "common": "Common",
   "common-panel-settings": "Common nwg-panel settings",
+  "continuous": "Continuous",
   "controls": "Controls",
   "controls-window-width-tooltip": "Controls window width in pixels; leave 0 for auto.",
   "cover-size": "Cover size",
